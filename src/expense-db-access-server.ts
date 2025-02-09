@@ -6,7 +6,6 @@ const db = new Database('expenses.sqlite', { create: true, strict: true });
 const app = new Elysia()
 	.get('/', () => 'Hello Elysia')
 	.get('/expense/id/:id', ({ params: { id }, set }) => {
-		console.log(id);
 		const query = db.query('SELECT * FROM expenses WHERE ex_id=$id;');
 		const result = query.get({ id: id });
 		set.headers['access-control-allow-origin'] = '*';
@@ -28,21 +27,57 @@ const app = new Elysia()
 		set.headers['content-type'] = 'application/json';
 		return result;
 	})
-	.get('/category/all/:limit?', ({ params: { limit }, set }) => {
-		let maxExpenseReturn = 50;
-		try {
-			limit === undefined ? (maxExpenseReturn = 50) : (maxExpenseReturn = Number(limit));
-		} catch (e: any) {
-			console.log(e.message);
+	.get(
+		'/category/all/:limit?',
+		({ params: { limit }, set, query: { type } }) => {
+			let maxExpenseReturn = 50;
+
+			set.headers['access-control-allow-origin'] = '*';
+			set.headers['content-type'] = 'application/json';
+			set.status = 200;
+
+			try {
+				limit === undefined ? (maxExpenseReturn = 50) : (maxExpenseReturn = Number(limit));
+
+				let categorySelection = db.query(
+					'SELECT * FROM category ORDER BY cat_id ASC LIMIT $maxLimit'
+				);
+
+				if (type) {
+					const budgetTypeQuery = db.query(
+						'SELECT bt_id FROM budget_types WHERE bt_title=$title'
+					);
+					const budgetTypeResult = budgetTypeQuery.get({ title: type });
+
+					if (!budgetTypeResult) throw new Error('Invalid type');
+
+					categorySelection = db.query(
+						'SELECT * FROM category WHERE cat_budget_type_id=$budgetTypeId ORDER BY cat_id ASC LIMIT $maxLimit'
+					);
+
+					const result = categorySelection.all({
+						maxLimit: maxExpenseReturn,
+						budgetTypeId: budgetTypeResult.bt_id,
+					});
+					return { results: result };
+				} else {
+				}
+
+				const result = categorySelection.all({ maxLimit: maxExpenseReturn });
+
+				return { results: result };
+			} catch (e: any) {
+				console.log(e.message);
+				set.status = 400;
+				return { results: e.message };
+			}
+		},
+		{
+			query: t.Object({
+				type: t.String(),
+			}),
 		}
-
-		const query = db.query('SELECT * FROM category ORDER BY cat_id ASC LIMIT $maxLimit');
-		const result = query.all({ maxLimit: maxExpenseReturn });
-		set.headers['access-control-allow-origin'] = '*';
-		set.headers['content-type'] = 'application/json';
-
-		return result;
-	})
+	)
 	.options('/category/:id', ({ set }) => {
 		set.headers['Access-Control-Allow-Origin'] = '*';
 		set.headers['Access-Control-Allow-Methods'] = 'PATCH, DELETE, OPTIONS';
@@ -211,7 +246,6 @@ const app = new Elysia()
 			month = month.padStart(2, '0');
 			month = month.substring(month.length - 2, month.length);
 
-			console.log(month);
 			const query = db.prepare(
 				"SELECT * FROM expenses AS exp WHERE strftime('%Y', exp.ex_date) = $year AND strftime('%m', exp.ex_date) = $month;"
 			);
@@ -234,9 +268,6 @@ const app = new Elysia()
 	.post(
 		'/expense/add',
 		({ body, set }) => {
-			console.log('body', body);
-			console.log('typeof body', typeof body);
-
 			set.headers['Access-Control-Allow-Origin'] = '*';
 			set.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS';
 			set.headers['Access-Control-Allow-Headers'] = 'Content-Type';
@@ -245,7 +276,7 @@ const app = new Elysia()
 				const name = body['name'];
 				const amount = body['amount'];
 				let date = body['date'];
-				console.log(date);
+
 				if (date.charAt(date.length - 1) === 'Z') {
 					date = date.substring(0, date.length - 1);
 				}
@@ -301,7 +332,7 @@ const app = new Elysia()
 			const name = body['name'];
 			const amount = body['amount'];
 			let date = body['date'];
-			console.log(date);
+
 			if (date.charAt(date.length - 1) === 'Z') {
 				date = date.substring(0, date.length - 1);
 			}
@@ -362,7 +393,7 @@ const app = new Elysia()
 				'SELECT b_starting_balance FROM budgets WHERE b_year=$year AND b_month=$month'
 			);
 			const result = query.get({ year: year, month: month });
-			console.log(result);
+
 			if (!result) throw new Error('Budget does not exist');
 			return { results: { startingBalance: result.b_starting_balance } };
 		} catch (error: any) {
@@ -374,27 +405,43 @@ const app = new Elysia()
 		set.headers['Access-Control-Allow-Origin'] = '*';
 		set.headers['Access-Control-Allow-Methods'] = 'GET';
 		set.status = 200;
-
-		month = month.padStart(2, '0');
-		month = month.substring(month.length - 2, month.length);
+		console.log('Getting planned');
 
 		const getBudget = db.query(
 			'SELECT b_id FROM budgets WHERE b_year=$year AND b_month=$month'
 		);
 
 		const sumExpenses = db.query(
-			'SELECT SUM(be_planned_amount) as be_planned_sum FROM budgeting_expenses WHERE be_budget_id=$bId GROUP BY be_planned_amount'
+			'SELECT SUM(be_planned_amount) as be_planned_expenses FROM budgeting_expenses WHERE be_budget_id=$bId AND NOT be_budget_type_id=3 GROUP BY be_budget_id'
+		);
+
+		const sumIncome = db.query(
+			'SELECT SUM(be_planned_amount) as be_planned_income FROM budgeting_expenses WHERE be_budget_id=$bId AND be_budget_type_id=3 GROUP BY be_budget_id'
 		);
 
 		try {
 			const budgetId = getBudget.get({ year: year, month: month });
-			const plannedSum = sumExpenses.get({ bId: budgetId.b_id });
-			console.log(plannedSum);
-			if (!plannedSum) throw new Error('Budget does not exist');
-			return { results: { plannedSum: plannedSum.be_planned_sum } };
+			console.log('budgetId', budgetId);
+			const plannedExpenses = sumExpenses.get({ bId: budgetId.b_id });
+			const plannedIncome = sumIncome.get({ bId: budgetId.b_id });
+			console.log('------------------------');
+			console.log('PLANNED EXPENSES', plannedExpenses);
+			console.log('PLANNED INCOME', plannedIncome);
+			console.log('------------------------');
+			if (!plannedExpenses) return { results: { plannedSum: 0 } };
+			if (!plannedIncome)
+				return { results: { plannedSum: plannedExpenses.be_planned_expenses } };
+
+			return {
+				results: {
+					plannedSum:
+						plannedExpenses.be_planned_expenses - plannedIncome.be_planned_income,
+				},
+			};
 		} catch (error: any) {
 			set.status = 400;
-			return { results: error.message };
+			console.error(error);
+			return { results: { erorr: error.message, year: year, month: month } };
 		}
 	})
 	.get('/budgeting/:year/:month/actual', ({ params: { year, month }, set }) => {
@@ -402,25 +449,36 @@ const app = new Elysia()
 		set.headers['Access-Control-Allow-Methods'] = 'GET';
 		set.status = 200;
 
-		month = month.padStart(2, '0');
-		month = month.substring(month.length - 2, month.length);
-
 		const getBudget = db.query(
 			'SELECT b_id FROM budgets WHERE b_year=$year AND b_month=$month'
 		);
 
 		const sumExpenses = db.query(
-			'SELECT SUM(be_actual_amount) as be_actual_sum FROM budgeting_expenses WHERE be_budget_id=$bId GROUP BY be_actual_amount'
+			'SELECT SUM(be_actual_amount) as be_actual_expenses FROM budgeting_expenses WHERE be_budget_id=$bId AND NOT be_budget_type_id=3 GROUP BY be_actual_amount'
+		);
+
+		const sumIncome = db.query(
+			'SELECT SUM(be_actual_amount) as be_actual_income FROM budgeting_expenses WHERE be_budget_id=$bId AND be_budget_type_id=3 GROUP BY be_actual_amount'
 		);
 
 		try {
 			const budgetId = getBudget.get({ year: year, month: month });
-			const actualSum = sumExpenses.get({ bId: budgetId.b_id });
-			console.log(actualSum);
-			if (!actualSum) throw new Error('Budget does not exist');
-			return { results: { actualSum: actualSum.be_actual_sum } };
+			const actualExpenses = sumExpenses.get({ bId: budgetId.b_id });
+			const actualIncome = sumIncome.get({ bId: budgetId.b_id });
+
+			console.log('actual Expenses, actual Income', actualExpenses, actualIncome);
+
+			if (!actualExpenses) return { results: { actualSum: 0 } };
+			if (!actualIncome) return { results: { actualSum: actualExpenses.be_actual_expenses } };
+
+			return {
+				results: {
+					actualSum: actualExpenses.be_actual_expenses + actualIncome.be_actual_income,
+				},
+			};
 		} catch (error: any) {
 			set.status = 400;
+			console.error(error);
 			return { results: error.message };
 		}
 	})
@@ -439,50 +497,65 @@ const app = new Elysia()
 
 		try {
 			const budget = budgetExists.get({ year: year, month: month });
+			console.log('budget', budget);
 			const budgetTypeId = getBudgetTypeId.get({ title: type });
+			console.log('budgetTypeId', budgetTypeId);
 			const budgetExpense = getBudgetByType.all({
 				bId: budget.b_id,
 				btId: budgetTypeId.bt_id,
 			});
+			console.log('budgetExpense', budgetExpense);
 			return { results: budgetExpense };
 		} catch (error: any) {
 			set.status = 400;
 			return { results: { error: error.message } };
 		}
 	})
-	.post('/budgeting/create/:year/:month', ({ params: { year, month }, set }) => {
+	.options('/budgeting/create/:year/:month', ({ set }) => {
 		set.headers['Access-Control-Allow-Origin'] = '*';
-		set.headers['Access-Control-Allow-Methods'] = 'GET';
-		set.status = 200;
-
-		month = month.padStart(2, '0');
-		month = month.substring(month.length - 2, month.length);
-
-		try {
-			const exists = db.query(
-				'SELECT * FROM budgets WHERE b_year = $year AND b_month = $month'
-			);
-			const existsResult = exists.all({ year: year, month: month });
-			console.log('existsResult', existsResult);
-			if (existsResult.length !== 0) {
-				return { results: 'Budget already exists' };
-			}
-
-			const insertion = db.prepare(
-				'INSERT INTO budgets (b_year, b_month) VALUES ($year, $month)'
-			);
-
-			const results = insertion.run({ year: year, month: month });
-			return { results: { id: results.lastInsertRowid } };
-		} catch (error) {
-			set.status = 400;
-			console.error(error);
-			return { results: error };
-		}
+		set.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS';
+		set.headers['Access-Control-Allow-Headers'] = 'Content-Type';
+		set.status = 204; // No Content
 	})
-	.options('/budgeting/category/:year/:month', ({ params: { year, month }, set }) => {
+	.post(
+		'/budgeting/create/:year/:month',
+		({ params: { year, month }, set, body }) => {
+			set.headers['Access-Control-Allow-Origin'] = '*';
+			set.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS';
+			set.headers['Access-Control-Allow-Headers'] = 'Content-Type';
+			set.status = 200;
+
+			try {
+				const exists = db.query(
+					'SELECT * FROM budgets WHERE b_year = $year AND b_month = $month'
+				);
+				const existsResult = exists.all({ year: year, month: month });
+
+				if (existsResult.length !== 0) {
+					return { results: 'Budget already exists' };
+				}
+
+				const insertion = db.prepare(
+					'INSERT INTO budgets (b_year, b_month, b_starting_balance) VALUES ($year, $month, $startingBalance)'
+				);
+
+				const results = insertion.run({
+					year: year,
+					month: month,
+					startingBalance: body.startingBalance,
+				});
+				return { results: { id: results.lastInsertRowid } };
+			} catch (error) {
+				set.status = 400;
+				console.error(error);
+				return { results: error };
+			}
+		},
+		{ body: t.Object({ startingBalance: t.Numeric() }) }
+	)
+	.options('/budgeting/category/:year/:month', ({ set }) => {
 		set.headers['Access-Control-Allow-Origin'] = '*';
-		set.headers['Access-Control-Allow-Methods'] = 'POST, DELETE,OPTIONS';
+		set.headers['Access-Control-Allow-Methods'] = 'POST, DELETE,PATCH,OPTIONS';
 		set.headers['Access-Control-Allow-Headers'] = 'Content-Type';
 		set.status = 204; // No Content
 	})
@@ -491,9 +564,9 @@ const app = new Elysia()
 		({ params: { year, month }, set, body }) => {
 			set.headers['Access-Control-Allow-Origin'] = '*';
 			set.headers['Access-Control-Allow-Methods'] = 'OPTIONS,POST';
+			set.headers['Access-Control-Allow-Headers'] = 'Content-Type';
 			set.status = 200;
 
-			console.log(year, month);
 			// find budget with the same year and month
 
 			const findBudgetId = db.query(
@@ -503,6 +576,10 @@ const app = new Elysia()
 			// find the category id with the same title
 
 			const findCategoryId = db.query('SELECT cat_id FROM category WHERE cat_title=$title');
+
+			const createCategory = db.prepare(
+				'INSERT INTO category (cat_title, cat_budget_type_id, cat_removable, cat_editable) VALUES ($catTitle, $catBudgetTypeId, 1, 1)'
+			);
 
 			// find the same budget type with the same title
 
@@ -518,15 +595,19 @@ const app = new Elysia()
 			try {
 				const budgetId = findBudgetId.get({ year: year, month: month });
 
-				const categoryId = findCategoryId.get({ title: body.title });
+				let categoryId = findCategoryId.get({ title: body.title });
 
 				const budgetTypeId = findBudgetTypeId.get({ title: body.budgetType });
 
-				console.log(budgetId, categoryId, budgetTypeId);
 				if (!budgetId) throw new Error('Budget not found');
-				if (!categoryId) throw new Error('Category not found');
+				if (!categoryId) {
+					const createCategoryResult = createCategory.run({
+						catTitle: body.title,
+						catBudgetTypeId: budgetTypeId.bt_id,
+					});
+					categoryId = { cat_id: createCategoryResult.lastInsertRowid };
+				}
 				if (!budgetTypeId) throw new Error('Budget type not found');
-
 				// return { results: 'In testing mode' };
 
 				const results = insertion.run({
@@ -535,8 +616,13 @@ const app = new Elysia()
 					budgetTypeId: budgetTypeId.bt_id,
 					planned_amount: body.plannedAmount,
 				});
+
+				console.log('Inserted budget category expense with id', results.lastInsertRowid);
+
 				return { results: { id: results.lastInsertRowid } };
 			} catch (error: any) {
+				set.status = 400;
+				console.error('ERROR | ', error);
 				return { results: error.message };
 			}
 		},
@@ -556,7 +642,11 @@ const app = new Elysia()
 			set.status = 200;
 
 			const expenseExists = db.prepare(
-				'SELECT be_id FROM budgeting_expenses WHERE be_id =$id'
+				'SELECT be_id, be_category_id FROM budgeting_expenses WHERE be_id =$id'
+			);
+
+			const checkIfRemoveable = db.query(
+				'SELECT cat_removable FROM category WHERE cat_id=$catId'
 			);
 
 			const deleteExpenseById = db.prepare(
@@ -565,10 +655,17 @@ const app = new Elysia()
 			try {
 				const expenseExistsResult = expenseExists.get({ id: body.id });
 				if (!expenseExistsResult) return { results: { message: 'Element does not exist' } };
-				const results = deleteExpenseById.run({ id: body.id });
+				const categoryIsRemoveable = checkIfRemoveable.get({
+					catId: expenseExistsResult.be_category_id,
+				});
+
+				if (categoryIsRemoveable && categoryIsRemoveable.cat_removable === 0)
+					throw new Error('Category is not removeable');
+				deleteExpenseById.run({ id: body.id });
 
 				return { results: { message: `Deleted 1 rows` } };
 			} catch (error: any) {
+				set.status = 400;
 				return { results: error.message };
 			}
 		},
@@ -582,8 +679,19 @@ const app = new Elysia()
 		'/budgeting/category/:year/:month',
 		({ params: { year, month }, set, body }) => {
 			set.headers['Access-Control-Allow-Origin'] = '*';
-			set.headers['Access-Control-Allow-Methods'] = 'OPTIONS,DELETE';
+			set.headers['Access-Control-Allow-Methods'] = 'OPTIONS,PATCH';
 			set.status = 200;
+
+			console.log(
+				'PATCH Passed data',
+				year,
+				month,
+				body.id,
+				body.title,
+				body.budgetType,
+				body.plannedAmount,
+				body.actualAmount
+			);
 
 			const budget = db.prepare(
 				'SELECT b_id FROM budgets WHERE b_year=$year AND b_month=$month'
@@ -593,25 +701,59 @@ const app = new Elysia()
 				'UPDATE budgeting_expenses SET be_planned_amount=$plannedAmount,be_actual_amount=$actualAmount WHERE be_id=$id AND be_budget_id=$bId'
 			);
 
+			const createCategory = db.query(
+				'INSERT INTO category (cat_title, cat_budget_type_id, cat_removable, cat_editable) VALUES ($catTitle, $catBudgetType, 1, 1);'
+			);
+
+			// insert
+			const createBudgetExpense = db.prepare(
+				'INSERT INTO budgeting_expenses (be_budget_id, be_category_id, be_budget_type_id, be_planned_amount) VALUES ($budgetId, $catId, $budgetTypeId, $planned_amount)'
+			);
+
+			const findBudgetTypeId = db.query(
+				'SELECT bt_id FROM budget_types WHERE bt_title=$title'
+			);
+
 			try {
 				const budgetResults = budget.get({ year: year, month: month });
 				if (!budgetResults) throw new Error('Budget does not exist');
 
-				updateValue.run({
+				const updateValueResults = updateValue.run({
 					id: body.id,
 					bId: budgetResults.b_id,
 					plannedAmount: body.plannedAmount,
 					actualAmount: body.actualAmount,
 				});
+
+				console.log(updateValueResults);
+
+				if (updateValueResults.changes === 0) {
+					const budgetTypeId = findBudgetTypeId.get({ title: body.budgetType });
+					if (!budgetTypeId) throw new Error('Invalid budget type');
+					const creationResults = createCategory.run({
+						catTitle: body.title,
+						catBudgetType: budgetTypeId.bt_id,
+					});
+
+					const results = createBudgetExpense.run({
+						budgetId: budgetResults.b_id,
+						catId: creationResults.lastInsertRowid,
+						budgetTypeId: budgetTypeId.bt_id,
+						planned_amount: body.plannedAmount,
+					});
+					return { results: { id: results.lastInsertRowid } };
+				}
 				return { results: { message: 'Updated successfully' } };
-			} catch (e) {
+			} catch (e: any) {
 				set.status = 400;
-				return { results: { error: 'Error updating category' } };
+				return { results: { error: e.message } };
 			}
 		},
 		{
 			body: t.Object({
 				id: t.Numeric(),
+				title: t.String(),
+				budgetType: t.String(),
 				plannedAmount: t.Numeric(),
 				actualAmount: t.Numeric(),
 			}),
