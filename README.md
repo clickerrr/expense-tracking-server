@@ -1,15 +1,26 @@
-# Elysia with Bun runtime
+# 💸 Expense Tracker Backend (Bun + Elysia)
 
-## Getting Started
-To get started with this template, simply paste this command into your terminal:
+This is the backend service for the [Expense Tracking Application](https://github.com/clickerrr/expense-tracking-application), built with **Bun** and **Elysia**, and powered by a local **SQLite** database. It provides a lightweight and fast RESTful API for managing personal expenses and categories.
+
+---
+
+## 🛠 Tech Stack
+
+- [Bun](https://bun.sh) (Runtime)
+- [Elysia](https://elysiajs.com) (Web framework)
+- SQLite (Local database)
+
+---
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+- [Bun](https://bun.sh/docs/installation)
+
+### Run the server:
+
 ```bash
-bun create elysia ./elysia-example
+bun install
+bun run start
 ```
-
-## Development
-To start the development server run:
-```bash
-bun run dev
-```
-
-Open http://localhost:3000/ with your browser to see the result.
